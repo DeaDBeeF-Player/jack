@@ -10,7 +10,6 @@
 #endif
 
 #define JACK_CLIENT_NAME "deadbeef"
-#define CHANNELS 2
 
 #include <unistd.h>
 #include <jack/jack.h>
@@ -25,12 +24,20 @@ DB_functions_t *deadbeef;
 
 static jack_client_t *ch; // client handle
 static jack_status_t jack_status;
-static jack_port_t *jack_ports[CHANNELS];
+static jack_port_t *jack_ports[2]; // FIXME: this magic number is a hack to
+                                   //        get it to build. must replace
+                                   //        this with number of channels!
 static unsigned short state;
 static short errcode; // used to store error codes
 static short jack_connected = 0;
 static short DidWeStartJack = 0;
 static int rate;
+static ddb_waveformat_t jack_fmt = {
+    .bps = 32,
+    .is_float = 1,
+    .channels = 2,
+    .channelmask = DDB_SPEAKER_FRONT_LEFT & DDB_SPEAKER_FRONT_RIGHT,
+};
 
 static int
 jack_stop (void);
@@ -44,13 +51,17 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
     if (!jack_connected) return -1;
 
     // FIXME: This function copies from the streamer to a local buffer,
-    //        and then to JACK's buffer. This is wasteful. Since JACK
-    //        uses floating point samples and we are using integers,
-    //        this may not be fixable without rewriting the streamer.
+    //        and then to JACK's buffer. This is wasteful.
+
+    //            Update 2011-01-01:
+    //        The streamer can now use floating point samples, but there
+    //        is still no easy solution to this because the streamer
+    //        outputs both channels multiplexed, whereas JACK expects
+    //        each channel to be written to a separate buffer.
 
     switch (state) {
         case OUTPUT_STATE_PLAYING: {
-            char buf[nframes * CHANNELS * 2];
+            char buf[nframes * jack_fmt.channels * 4];
             unsigned bytesread = deadbeef->streamer_read (buf, sizeof(buf));
 
             // this avoids a crash if we are playing and change to a plugin
@@ -60,17 +71,17 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
                 return 0;
             }
 
-            float *jack_port_buffer[CHANNELS];
-            for (unsigned short i = 0; i < CHANNELS; i++) {
+            float *jack_port_buffer[jack_fmt.channels];
+            for (unsigned short i = 0; i < jack_fmt.channels; i++) {
                 jack_port_buffer[i] = jack_port_get_buffer(jack_ports[i], nframes);
             }
 
             float vol = deadbeef->volume_get_amp ();
 
-            for (unsigned i = 0; i < bytesread/(CHANNELS*2); i++) {
-                for (unsigned short j = 0; j < CHANNELS; j++) {
+            for (unsigned i = 0; i < bytesread/(jack_fmt.channels*4); i++) {
+                for (unsigned short j = 0; j < jack_fmt.channels; j++) {
                     // JACK expects floating point samples, so we need to convert from integer
-                    *jack_port_buffer[j]++ = (float)(((int16_t*)buf)[(CHANNELS*i) + j]) * vol / 32768;
+                    *jack_port_buffer[j]++ = ((float*)buf)[(jack_fmt.channels*i) + j] * vol / 32768;
                 }
             }
 
@@ -79,13 +90,13 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
 
         // this is necessary to stop JACK going berserk when we pause/stop
         default: {
-            float *jack_port_buffer[CHANNELS];
-            for (unsigned short i = 0; i < CHANNELS; i++) {
+            float *jack_port_buffer[jack_fmt.channels];
+            for (unsigned short i = 0; i < jack_fmt.channels; i++) {
                 jack_port_buffer[i] = jack_port_get_buffer(jack_ports[i], nframes);
             }
 
             for (unsigned i = 0; i < nframes; i++) {
-                for (unsigned short j = 0; j < CHANNELS; j++) {
+                for (unsigned short j = 0; j < jack_fmt.channels; j++) {
                     *jack_port_buffer[j]++ = 0;
                 }
             }
@@ -156,7 +167,7 @@ jack_init (void) {
     jack_on_shutdown (ch, (JackShutdownCallback)&jack_shutdown_callback, NULL);
 
     // register ports
-    for (unsigned short i=0; i < CHANNELS; i++) {
+    for (unsigned short i=0; i < jack_fmt.channels; i++) {
         char port_name[11];
 
         // i+1 used to adhere to JACK convention of counting ports from 1, not 0
@@ -184,7 +195,7 @@ jack_init (void) {
             fprintf (stderr, "jack: warning: could not find any playback ports to connect to\n");
         }
         else {
-            for (unsigned short i=0; i < CHANNELS; i++) {
+            for (unsigned short i=0; i < jack_fmt.channels; i++) {
                 // error code 17 means port connection exists. We do not want to return an error in this case, simply proceed.
                 if ((errcode = jack_connect(ch, jack_port_name (jack_ports[i]), playback_ports[i])) && (errcode != 17)) {
                     fprintf (stderr, "jack: could not create connection from %s to %s, error %d\n", jack_port_name (jack_ports[i]), playback_ports[i], errcode);
@@ -198,17 +209,11 @@ jack_init (void) {
     return 0;
 }
 
-static int
-jack_get_rate (void) {
-    trace ("jack_get_rate\n");
-    return rate;
-}
-
-static int
-jack_change_rate (int rate) {
+static void
+jack_setformat (ddb_waveformat_t *rate) {
     // FIXME: If (and ONLY IF) we started JACK (i.e. DidWeStartJack == TRUE),
     //        allow this to work by stopping and restarting JACK.
-    return jack_get_rate();
+    return;
 }
 
 static int
@@ -268,32 +273,9 @@ jack_unpause (void) {
 }
 
 static int
-jack_get_bps (void) {
-    trace ("jack_get_bps\n");
-    // as far as JACK is concerned this isn't that important
-    // we convert to float anyway (see jack_proc_callback)
-    return 16;
-}
-
-static int
-jack_get_channels (void) {
-    trace ("jack_get_channels\n");
-    return CHANNELS;
-}
-
-static int
 jack_get_state (void) {
     trace ("jack_get_state\n");
     return state;
-}
-
-static int
-jack_get_endianness (void) {
-#if WORDS_BIGENDIAN
-    return 1;
-#else
-    return 0;
-#endif
 }
 
 static int
@@ -339,7 +321,7 @@ static const char settings_dlg[] =
 static DB_output_t plugin = {
     DB_PLUGIN_SET_API_VERSION
     .plugin.version_major = 0,
-    .plugin.version_minor = 1,
+    .plugin.version_minor = 2,
     .plugin.nostop = 0,
     .plugin.type = DB_PLUGIN_OUTPUT,
     .plugin.id = "jack",
@@ -353,14 +335,12 @@ static DB_output_t plugin = {
     .plugin.configdialog = settings_dlg,
     .init = jack_init,
     .free = jack_free_deadbeef,
-    .change_rate = jack_change_rate,
+    .setformat = jack_setformat,
     .play = jack_play,
     .stop = jack_stop,
     .pause = jack_pause,
     .unpause = jack_unpause,
     .state = jack_get_state,
-    .samplerate = jack_get_rate,
-    .bitspersample = jack_get_bps,
-    .channels = jack_get_channels,
-    .endianness = jack_get_endianness,
+    .fmt = jack_fmt,
+    .has_volume = 1,
 };
