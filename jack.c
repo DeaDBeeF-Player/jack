@@ -123,8 +123,8 @@ jack_shutdown_callback (void *arg) {
         jack_init ();
     }
     else {
-        fprintf (stderr, "jack: JACK server shut down unexpectedly, stopping playback\n");
-        deadbeef->playback_stop ();
+        //fprintf (stderr, "jack: JACK server shut down unexpectedly, stopping playback\n");
+        //deadbeef->playback_stop ();
     }
     return 0;
 }
@@ -322,7 +322,7 @@ static DB_output_t plugin = {
     DB_PLUGIN_SET_API_VERSION
     .plugin.version_major = 0,
     .plugin.version_minor = 2,
-    .plugin.nostop = 0,
+    //.plugin.nostop = 0,
     .plugin.type = DB_PLUGIN_OUTPUT,
     .plugin.id = "jack",
     .plugin.name = "JACK output plugin",
@@ -341,6 +341,6 @@ static DB_output_t plugin = {
     .pause = jack_pause,
     .unpause = jack_unpause,
     .state = jack_get_state,
-    .fmt = jack_fmt,
+    //.fmt = jack_fmt,
     .has_volume = 1,
 };
