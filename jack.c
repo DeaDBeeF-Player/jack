@@ -74,7 +74,7 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
             // this is intended to make playback less jittery in case of
             // inadequate read from streamer
             while (bytesread < sizeof(buf)) {
-                usleep (100);
+                //usleep (100);
                 unsigned morebytesread = deadbeef->streamer_read (buf+bytesread, sizeof(buf)-bytesread);
                 if (morebytesread != -1) bytesread += morebytesread;
             }
