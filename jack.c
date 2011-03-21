@@ -64,11 +64,18 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
             trace ("first sample: %f\n", ((float*)buf)[0]);
             trace ("second sample: %f\n", ((float*)buf)[1]);
 
-            // this avoids a crash if we are playing and change to a plugin
-            // with no valid output and then switch back
+	    // this avoids a crash if we are playing and change to a plugin
+	    // with no valid output and then switch back
             if (bytesread == -1) {
                 state = OUTPUT_STATE_STOPPED;
                 return 0;
+            }
+
+            // this is intended to make playback less jittery in case of
+            // inadequate read from streamer
+            while (bytesread < sizeof(buf)) {
+                unsigned morebytesread = deadbeef->streamer_read (buf+bytesread, sizeof(buf)-bytesread);
+                if (morebytesread != -1) bytesread += morebytesread;
             }
 
             float *jack_port_buffer[plugin.fmt.channels];
@@ -78,7 +85,7 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
 
             float vol = deadbeef->volume_get_amp ();
 
-            for (unsigned i = 0; i < bytesread/(plugin.fmt.channels*4); i++) {
+            for (unsigned i = 0; i < nframes; i++) {
                 for (unsigned short j = 0; j < plugin.fmt.channels; j++) {
                     // JACK expects floating point samples, so we need to convert from integer
                     *jack_port_buffer[j]++ = ((float*)buf)[(plugin.fmt.channels*i) + j] * vol; // / 32768;
