@@ -32,12 +32,6 @@ static short errcode; // used to store error codes
 static short jack_connected = 0;
 static short DidWeStartJack = 0;
 static int rate;
-static ddb_waveformat_t jack_fmt = {
-    .bps = 32,
-    .is_float = 1,
-    .channels = 2,
-    .channelmask = DDB_SPEAKER_FRONT_LEFT & DDB_SPEAKER_FRONT_RIGHT,
-};
 
 static int
 jack_stop (void);
@@ -49,6 +43,7 @@ static int
 jack_proc_callback (jack_nframes_t nframes, void *arg) {
     trace ("jack_proc_callback\n");
     if (!jack_connected) return -1;
+    trace ("jack_connected was true\n");
 
     // FIXME: This function copies from the streamer to a local buffer,
     //        and then to JACK's buffer. This is wasteful.
@@ -61,8 +56,13 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
 
     switch (state) {
         case OUTPUT_STATE_PLAYING: {
-            char buf[nframes * jack_fmt.channels * 4];
+            trace ("nframes: %d\n", nframes);
+            trace ("plugin.fmt.channels: %d\n", plugin.fmt.channels);
+            char buf[nframes * plugin.fmt.channels * 4];
             unsigned bytesread = deadbeef->streamer_read (buf, sizeof(buf));
+            trace ("bytesread: %d\n", bytesread);
+            trace ("first sample: %f\n", ((float*)buf)[0]);
+            trace ("second sample: %f\n", ((float*)buf)[1]);
 
             // this avoids a crash if we are playing and change to a plugin
             // with no valid output and then switch back
@@ -71,17 +71,17 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
                 return 0;
             }
 
-            float *jack_port_buffer[jack_fmt.channels];
-            for (unsigned short i = 0; i < jack_fmt.channels; i++) {
+            float *jack_port_buffer[plugin.fmt.channels];
+            for (unsigned short i = 0; i < plugin.fmt.channels; i++) {
                 jack_port_buffer[i] = jack_port_get_buffer(jack_ports[i], nframes);
             }
 
             float vol = deadbeef->volume_get_amp ();
 
-            for (unsigned i = 0; i < bytesread/(jack_fmt.channels*4); i++) {
-                for (unsigned short j = 0; j < jack_fmt.channels; j++) {
+            for (unsigned i = 0; i < bytesread/(plugin.fmt.channels*4); i++) {
+                for (unsigned short j = 0; j < plugin.fmt.channels; j++) {
                     // JACK expects floating point samples, so we need to convert from integer
-                    *jack_port_buffer[j]++ = ((float*)buf)[(jack_fmt.channels*i) + j] * vol / 32768;
+                    *jack_port_buffer[j]++ = ((float*)buf)[(plugin.fmt.channels*i) + j] * vol; // / 32768;
                 }
             }
 
@@ -90,13 +90,13 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
 
         // this is necessary to stop JACK going berserk when we pause/stop
         default: {
-            float *jack_port_buffer[jack_fmt.channels];
-            for (unsigned short i = 0; i < jack_fmt.channels; i++) {
+            float *jack_port_buffer[plugin.fmt.channels];
+            for (unsigned short i = 0; i < plugin.fmt.channels; i++) {
                 jack_port_buffer[i] = jack_port_get_buffer(jack_ports[i], nframes);
             }
 
             for (unsigned i = 0; i < nframes; i++) {
-                for (unsigned short j = 0; j < jack_fmt.channels; j++) {
+                for (unsigned short j = 0; j < plugin.fmt.channels; j++) {
                     *jack_port_buffer[j]++ = 0;
                 }
             }
@@ -109,7 +109,8 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
 static int
 jack_rate_callback (void *arg) {
     if (!jack_connected) return -1;
-    rate = (int)jack_get_sample_rate(ch);
+    plugin.fmt.samplerate = (int)jack_get_sample_rate(ch);
+    return 0;
 }
 
 static int
@@ -167,7 +168,7 @@ jack_init (void) {
     jack_on_shutdown (ch, (JackShutdownCallback)&jack_shutdown_callback, NULL);
 
     // register ports
-    for (unsigned short i=0; i < jack_fmt.channels; i++) {
+    for (unsigned short i=0; i < plugin.fmt.channels; i++) {
         char port_name[11];
 
         // i+1 used to adhere to JACK convention of counting ports from 1, not 0
@@ -195,7 +196,7 @@ jack_init (void) {
             fprintf (stderr, "jack: warning: could not find any playback ports to connect to\n");
         }
         else {
-            for (unsigned short i=0; i < jack_fmt.channels; i++) {
+            for (unsigned short i=0; i < plugin.fmt.channels; i++) {
                 // error code 17 means port connection exists. We do not want to return an error in this case, simply proceed.
                 if ((errcode = jack_connect(ch, jack_port_name (jack_ports[i]), playback_ports[i])) && (errcode != 17)) {
                     fprintf (stderr, "jack: could not create connection from %s to %s, error %d\n", jack_port_name (jack_ports[i]), playback_ports[i], errcode);
@@ -209,11 +210,11 @@ jack_init (void) {
     return 0;
 }
 
-static void
+static int
 jack_setformat (ddb_waveformat_t *rate) {
     // FIXME: If (and ONLY IF) we started JACK (i.e. DidWeStartJack == TRUE),
     //        allow this to work by stopping and restarting JACK.
-    return;
+    return 0;
 }
 
 static int
@@ -327,8 +328,9 @@ static DB_output_t plugin = {
     .plugin.id = "jack",
     .plugin.name = "JACK output plugin",
     .plugin.descr = "plays sound via JACK API",
-    .plugin.author = "Steven McDonald",
-    .plugin.email = "steven.mcdonald@libremail.me",
+    .plugin.copyright = "Copyright (C) 2010-2011 Steven McDonald <steven.mcdonald@     libremail.me>",
+//    .plugin.author = "Steven McDonald",
+//    .plugin.email = "steven.mcdonald@libremail.me",
     .plugin.website = "http://gitorious.org/deadbeef-sm-plugins/pages/Home",
     .plugin.start = jack_plugin_start,
     .plugin.stop = jack_plugin_stop,
@@ -341,6 +343,12 @@ static DB_output_t plugin = {
     .pause = jack_pause,
     .unpause = jack_unpause,
     .state = jack_get_state,
-    //.fmt = jack_fmt,
+    .fmt = {
+        .bps = 32,
+        .is_float = 1,
+        .channels = 2,
+        .channelmask = DDB_SPEAKER_FRONT_LEFT | DDB_SPEAKER_FRONT_RIGHT,
+        .is_bigendian = 0,
+    },
     .has_volume = 1,
 };
