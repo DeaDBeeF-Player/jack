@@ -15,6 +15,7 @@
 #include <jack/jack.h>
 #include <deadbeef/deadbeef.h>
 #include <signal.h>
+#include <limits.h>
 
 //#define trace(...) { fprintf(stderr, __VA_ARGS__); }
 #define trace(fmt,...)
@@ -56,13 +57,8 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
 
     switch (state) {
         case OUTPUT_STATE_PLAYING: {
-            trace ("nframes: %d\n", nframes);
-            trace ("plugin.fmt.channels: %d\n", plugin.fmt.channels);
-            char buf[nframes * plugin.fmt.channels * 4];
+            char buf[nframes * plugin.fmt.channels * (plugin.fmt.bps / CHAR_BIT)];
             unsigned bytesread = deadbeef->streamer_read (buf, sizeof(buf));
-            trace ("bytesread: %d\n", bytesread);
-            trace ("first sample: %f\n", ((float*)buf)[0]);
-            trace ("second sample: %f\n", ((float*)buf)[1]);
 
 	    // this avoids a crash if we are playing and change to a plugin
 	    // with no valid output and then switch back
@@ -73,20 +69,21 @@ jack_proc_callback (jack_nframes_t nframes, void *arg) {
 
             // this is intended to make playback less jittery in case of
             // inadequate read from streamer
-            while (bytesread < sizeof(buf)) {
+/*            while (bytesread < sizeof(buf)) {
                 //usleep (100);
                 unsigned morebytesread = deadbeef->streamer_read (buf+bytesread, sizeof(buf)-bytesread);
                 if (morebytesread != -1) bytesread += morebytesread;
-            }
+            } */
 
+            jack_nframes_t framesread = bytesread / (plugin.fmt.channels * (plugin.fmt.bps / CHAR_BIT));
             float *jack_port_buffer[plugin.fmt.channels];
             for (unsigned short i = 0; i < plugin.fmt.channels; i++) {
-                jack_port_buffer[i] = jack_port_get_buffer(jack_ports[i], nframes);
+                jack_port_buffer[i] = jack_port_get_buffer(jack_ports[i], framesread);//nframes);
             }
 
             float vol = deadbeef->volume_get_amp ();
 
-            for (unsigned i = 0; i < nframes; i++) {
+            for (unsigned i = 0; i < framesread; i++) {
                 for (unsigned short j = 0; j < plugin.fmt.channels; j++) {
                     // JACK expects floating point samples, so we need to convert from integer
                     *jack_port_buffer[j]++ = ((float*)buf)[(plugin.fmt.channels*i) + j] * vol; // / 32768;
